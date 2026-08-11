@@ -1,0 +1,40 @@
+#!/bin/bash
+# Deriva la URL pública de la SPA de Taiga a partir de las variables que
+# Railway inyecta automáticamente en todos los servicios
+# (RAILWAY_PUBLIC_DOMAIN), de modo que el usuario final no tenga que
+# configurar nada.
+#
+# IMPORTANTE: este archivo termina en ".envsh" a propósito. El entrypoint
+# oficial de nginx hace "source" de los .envsh (sus exports persisten y
+# llegan al script 30_config_env_subst.sh); los .sh se ejecutan en un
+# subproceso y sus exports se perderían.
+
+set -euo pipefail
+
+if [ -z "${TAIGA_URL:-}" ]; then
+    if [ -n "${RAILWAY_PUBLIC_DOMAIN:-}" ]; then
+        export TAIGA_URL="https://${RAILWAY_PUBLIC_DOMAIN}"
+    else
+        export TAIGA_URL="http://localhost"
+    fi
+fi
+
+if [ -z "${TAIGA_WEBSOCKETS_URL:-}" ]; then
+    if [ -n "${RAILWAY_PUBLIC_DOMAIN:-}" ]; then
+        export TAIGA_WEBSOCKETS_URL="wss://${RAILWAY_PUBLIC_DOMAIN}"
+    else
+        export TAIGA_WEBSOCKETS_URL="ws://localhost"
+    fi
+fi
+
+export TAIGA_SUBPATH="${TAIGA_SUBPATH:-}"
+
+# Valores que el template conf.json consume y que conviene dejar explícitos
+export GITHUB_CLIENT_ID="${GITHUB_CLIENT_ID:-null}"
+export GITLAB_CLIENT_ID="${GITLAB_CLIENT_ID:-null}"
+export GITLAB_URL="${GITLAB_URL:-null}"
+
+# La imagen base ya incluye un conf.json (valores relativos). El script
+# oficial 30_config_env_subst.sh solo regenera el fichero si NO existe,
+# así que lo eliminamos aquí para forzar su regeneración con las URLs reales.
+rm -f /usr/share/nginx/html/conf.json

@@ -1,0 +1,23 @@
+# Entorno y secretos
+.env
+.env.*
+!.env.example
+
+# Datos locales
+data/
+*.log
+
+# Sistema
+.DS_Store
+Thumbs.db
+
+# Python
+__pycache__/
+*.py[cod]
+
+# IDE
+.vscode/
+.idea/
+
+# Railway CLI (estado local del enlace)
+railway.json
