@@ -12,7 +12,8 @@ aplican a las imágenes desplegadas:
 | [taigaio/taiga-events](https://github.com/taigaio/taiga-events) | `taigaio/taiga-events:6.10.0` | MPL-2.0 |
 | [RabbitMQ](https://www.rabbitmq.com/) | `rabbitmq:3.8.34-alpine` | MPL-2.0 |
 | [PostgreSQL](https://www.postgresql.org/) | `postgres:12.3` | PostgreSQL License |
-| [nginx](https://nginx.org/) | incl. en la imagen de taiga-front | BSD 2-Clause |
+| [nginx](https://nginx.org/) | instalado en el contenedor `app` (paquete de Debian) | BSD 2-Clause |
+| [supervisord](http://supervisord.org/) | instalado en el contenedor `app` (paquete de Debian) | BSD 3-Clause |
 
 El código incluido en este repositorio (Dockerfiles, scripts, settings y
 documentación) es de nuestra autoría y se distribuye bajo la licencia MIT

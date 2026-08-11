@@ -1,135 +1,171 @@
 # Taiga en Railway (plantilla)
 
+[![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/deploy/taiga)
+
 [Taiga](https://www.taiga.io/) es una herramienta de gestión de proyectos
-(Scrum, Kanban) libre y open source. Esta plantilla despliega una
-instancia completa de Taiga en [Railway](https://railway.app/) con la
-mínima configuración posible por parte del usuario final.
+(Scrum, Kanban) libre y open source. Esta plantilla despliega una instancia
+completa de Taiga en [Railway](https://railway.app/) con la mínima
+configuración posible por parte del usuario final.
+
+> **Un clic:** despliega directamente con el botón de arriba o desde
+> https://railway.com/deploy/taiga. No hay variables que rellenar a mano:
+> los secrets se generan automáticamente y el primer administrador se crea
+> solo.
 
 ## Arquitectura
 
-El proyecto se compone de **6 servicios** dentro de un mismo proyecto de
-Railway. Todos ellos se comunican por la red privada (`*.railway.internal`);
-solo el **gateway** queda expuesto públicamente.
+El proyecto se compone de **3 servicios** dentro de un mismo proyecto de
+Railway. Para que todo quepa en la capa gratuita (3 servicios, 512 MB por
+servicio), el stack de Taiga se empaqueta en un único contenedor:
+
+- **`app`** (contenedor todo-en-uno): nginx (SPA + reverse proxy) + gunicorn
+  (API de Django) + celery (worker + beat) + taiga-events (WebSockets),
+  orquestados con supervisord.
+- **`postgres`**: base de datos.
+- **`rabbitmq`**: broker de mensajes (tareas asíncronas y eventos).
 
 ```
 Cliente (https://<tu-dominio>.up.railway.app)
    │
    ▼
-┌──────────────────┐   (red privada)
-│    gateway        │  nginx: SPA + reverse proxy
-└──────┬───────┬────┘
-       │       │
-   /api/ /admin/   /events
-   /static/ /media/
-       │       │
-       ▼       ▼
-┌───────────┐ ┌──────────────┐
-│ taiga-back │ │ taiga-events │
-│  (gunicorn)│ │  (websockets)│
-└─────┬─────┘ └──────┬───────┘
-      │              │
-      │              ▼
-      │        ┌────────────┐
-      │        │  rabbitmq   │
-      │        └────────────┘
-      ├────────────┐
-      ▼            ▼
-┌────────────┐ ┌────────────┐
-│  postgres   │ │ taiga-async│
-│             │ │  (celery)  │
-└────────────┘ └────────────┘
+┌─────────────────────────────────────────────┐
+│  app (todo-en-uno)                           │
+│  nginx (80) ─► SPA                           │
+│    │─ /api/ /admin/ /static/ /media/ ─► gunicorn (8000)
+│    │─ /events ────────────────────────► taiga-events (8888)
+│    └─ celery worker + beat (colas)            │
+└──────┬──────────────────────────────┬────────┘
+       │                              │
+       ▼ (red privada)                ▼
+┌────────────┐                ┌────────────┐
+│  postgres   │                │  rabbitmq   │
+│  (5432)     │                │  (5672)     │
+└────────────┘                └────────────┘
 ```
 
-| Servicio | Imagen / origen | Puerta de red | Volúmenes |
+| Servicio | Imagen / origen | Puerta de red | Volumen |
 |---|---|---|---|
-| `gateway` | `docker/gateway` (sobre `taigaio/taiga-front:6.10.3`) | Pública (HTTP) | — |
-| `taiga-back` | `docker/back` (sobre `taigaio/taiga-back:6.10.2`) | Privada | `/taiga-back/media`, `/taiga-back/static` |
-| `taiga-async` | `docker/back` con `ROLE=async` (Celery) | Privada | — |
-| `taiga-events` | `taigaio/taiga-events:6.10.0` | Privada | — |
-| `rabbitmq` | `rabbitmq:3.8.34-alpine` | Privada | `/var/lib/rabbitmq` |
+| `app` | Repo `docker/app` (sobre `taigaio/taiga-back:6.10.2`) | Pública (puerto 80) | `/taiga-back/media` |
 | `postgres` | `postgres:12.3` | Privada | `/var/lib/postgresql/data` |
+| `rabbitmq` | `rabbitmq:3.8.34-alpine` | Privada | `/var/lib/rabbitmq` |
 
-### Por qué un volumen `static` y `media` propios
+Todos los servicios se comunican por la red privada (`*.railway.internal`);
+solo el `app` queda expuesto públicamente.
 
-Railway **no permite compartir un volumen entre varios servicios**. En el
-despliegue oficial de Taiga, nginx sirve los estáticos desde el mismo
-volumen que comparte con el backend. Aquí el backend recoge los estáticos
-en `collectstatic` al arrancar y los sirve él mismo sobre HTTP; el gateway
-simplemente los redirige por la red privada. Los adjuntos (`media`) se
-almacenan en el volumen del backend y se sirven de la misma forma.
+### Contenido del contenedor `app`
+
+| Proceso | Rol | Puerto |
+|---|---|---|
+| `nginx` | Sirve la SPA y hace de reverse proxy | 80 (público) |
+| `gunicorn` | API de Django (`taiga.wsgi`) | 8000 |
+| `celery -B` | Worker de tareas asíncronas + beat | — |
+| `taiga-events` | WebSockets en tiempo real | 8888 |
 
 ### Variables de entorno
 
-Todas las variables quedan definidas en la plantilla. El usuario final solo
-debe rellenar las de tipo *secret* que le pida Railway al crear el
-proyecto. Las más relevantes:
+Definidas en la plantilla con funciones `${{secret(...)}}` y variables de
+referencia, de modo que el usuario final **no configura nada**. La más
+relevante después del despliegue es:
 
-| Variable | Descripción |
-|---|---|
-| `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` | Credenciales de PostgreSQL |
-| `TAIGA_SECRET_KEY` | Clave secreta de Django (generar una aleatoria) |
-| `TAIGA_SITES_SCHEME` / `TAIGA_SITES_DOMAIN` | URL pública de la instalación |
-| `ADMIN_INITIAL_PASSWORD` | Contraseña del primer administrador |
-| `GUNICORN_WORKERS` | Workers de gunicorn (default `2`) |
-| `CELERY_CONCURRENCY` | Concurrencia del worker de Celery (default `2`) |
-| `RABBITMQ_USER` / `RABBITMQ_PASS` | Credenciales de RabbitMQ |
-| `TAIGA_EVENTS_RABBITMQ_HOST` / `TAIGA_ASYNC_RABBITMQ_HOST` | Hostname privado de RabbitMQ |
-| `TAIGA_BACK_URL` / `TAIGA_EVENTS_URL` | URLs internas usadas por la API |
+| Variable | Valor en el template | Descripción |
+|---|---|---|
+| `ADMIN_INITIAL_PASSWORD` | `${{secret(32)}}` | Contraseña del admin (se copia de Project → Variables tras desplegar) |
+| `ADMIN_USER` | `admin` | Primer administrador (se crea automáticamente) |
+| `ADMIN_EMAIL` | `admin@example.com` | Email del admin |
+| `TAIGA_SECRET_KEY` | `${{secret(32)}}` | Clave secreta de Django |
+| `DJANGO_SETTINGS_MODULE` | `settings.settings_railway` | Settings propios de Railway |
+| `POSTGRES_HOST` / `POSTGRES_PORT` | `postgres.railway.internal` / `5432` | Conexión privada a Postgres |
+| `POSTGRES_USER` / `POSTGRES_DB` | `${{ Postgres.POSTGRES_USER }}` / `${{ Postgres.POSTGRES_DB }}` | Referencias al servicio Postgres |
+| `POSTGRES_PASSWORD` | `${{ Postgres.POSTGRES_PASSWORD }}` | Referencia al secret de Postgres |
+| `RABBITMQ_USER` | `${{ RabbitMQ.RABBITMQ_DEFAULT_USER }}` | Referencia a RabbitMQ |
+| `RABBITMQ_PASS` | `${{ RabbitMQ.RABBITMQ_DEFAULT_PASS }}` | Referencia al secret de RabbitMQ |
+| `TAIGA_EVENTS_RABBITMQ_HOST` / `TAIGA_ASYNC_RABBITMQ_HOST` | `rabbitmq.railway.internal` | Host privado de RabbitMQ |
+| `GUNICORN_WORKERS` / `CELERY_CONCURRENCY` | `1` / `1` | Ajustados a la capa gratuita |
+| `ADMIN_BOOTSTRAP_ENABLED` | `true` | Crea el admin en el primer arranque |
 
-> El gateway deriva su URL pública de `RAILWAY_PUBLIC_DOMAIN`
-> automáticamente, sin configuración adicional.
+> La URL pública del sitio se deriva automáticamente de
+> `RAILWAY_PUBLIC_DOMAIN`; no hay que definir `TAIGA_SITES_DOMAIN`.
+
+### Postgres: por qué `PGDATA`
+
+El servicio `postgres` define `PGDATA=/var/lib/postgresql/data/pgdata`. Sin
+ella, PostgreSQL falla al arrancar sobre un volumen con
+`initdb: directory exists but is not empty` (el punto de montaje contiene
+`lost+found`). Al apuntar `PGDATA` a un subdirectorio el cluster se
+inicializa correctamente.
+
+### nginx: puerto objetivo del dominio
+
+La imagen base `taigaio/taiga-back` declara `EXPOSE 8000`, que hereda nuestro
+`EXPOSE 80`. La autodetección de puerto de Railway puede quedarse con el
+puerto equivocado, así que el dominio del template está fijado
+explícitamente al **puerto 80**.
 
 ## Despliegue
 
-1. Crea un proyecto vacío en [Railway](https://railway.app/new).
-2. Añade los servicios tal y como se indica en
-   [docs/deploy-railway.md](docs/deploy-railway.md) (o usa la plantilla
-   publicada: Railway desplegará todo automáticamente).
-3. Espera al primer despliegue: `taiga-back` recoge estáticos y crea el
-   administrador en el arranque inicial.
-4. Accede a la URL pública del servicio `gateway` e inicia sesión con el
-   usuario `admin` y la contraseña definida en `ADMIN_INITIAL_PASSWORD`.
+### Opción A — Template (recomendada)
+
+1. Pulsa el botón de arriba o entra en https://railway.com/deploy/taiga.
+2. Railway crea el proyecto con los 3 servicios y todos los secrets.
+3. Espera al primer arranque (migraciones + creación del admin, ~2 min).
+4. Abre el dominio público del servicio `app` e inicia sesión con `admin` y
+   el valor de `ADMIN_INITIAL_PASSWORD` (lo ves en el proyecto: **Variables**).
+
+### Opción B — Manual
+
+El proceso paso a paso está en [docs/deploy-railway.md](docs/deploy-railway.md).
 
 ### Requisitos de la capa gratuita
 
-Se ha configurado todo para que quepa en la capa gratuita de Railway:
-- PostgreSQL y RabbitMQ con límites de memoria ajustados.
-- Workers de gunicorn y Celery reducidos (variables `GUNICORN_WORKERS` y
-  `CELERY_CONCURRENCY`, por defecto `2`).
-- Un único volumen por servicio (solo back, rabbitmq y postgres).
+- 3 servicios, dentro del límite de 3 del plan free.
+- `GUNICORN_WORKERS=1` y `CELERY_CONCURRENCY=1` para mantenerse dentro de los
+  512 MB por servicio (vigila el pico de memoria en el primer arranque).
+- Un único volumen por servicio (media, postgres y rabbitmq).
 
 ## Estructura del repositorio
 
 ```
 ├── docker/
-│   ├── back/           Backend (imagen oficial + settings/entrypoint propios)
+│   ├── app/            Contenedor todo-en-uno de Taiga (activo)
 │   │   ├── Dockerfile
 │   │   ├── entrypoint.sh
+│   │   ├── nginx.conf
+│   │   ├── supervisord.conf
 │   │   ├── settings_railway.py
 │   │   ├── urls_railway.py
+│   │   ├── config_env_subst.sh
 │   │   └── bootstrap_admin.py
-│   └── gateway/        Gateway público (nginx + reverse proxy)
-│       ├── Dockerfile
-│       ├── gateway.conf
-│       └── 20_railway_env.envsh
+│   ├── back/           (legacy) Backend separado de la arquitectura anterior
+│   └── gateway/        (legacy) Gateway nginx de la arquitectura anterior
 ├── docs/
-│   ├── deploy-railway.md   Pasos manuales de despliegue
-│   └── guia-template.md    Guía para publicar la plantilla
+│   ├── deploy-railway.md    Pasos manuales de despliegue
+│   ├── guia-template.md     Cómo publicar/mantener el template
+│   └── template-overview.md Markdown del template en Railway
 ├── LICENSE
 └── THIRD_PARTY.md
 ```
 
+> `docker/back` y `docker/gateway` corresponden a la primera arquitectura
+> (servicios separados) y ya no se usan; se conservan como referencia.
+
 ## Solución de problemas
 
-- **La SPA carga pero la API falla**: revisa que el servicio `taiga-back`
-  esté en la red privada y que la variable `TAIGA_URL` del gateway sea la
-  URL pública.
-- **Los avatares/adjuntos no cargan**: comprueba que `/media/` llega al
-  backend y que el volumen `/taiga-back/media` está montado.
-- **El admin no se crea**: mira los logs de `taiga-back`; si
-  `ADMIN_INITIAL_PASSWORD` está vacía se omite (a propósito) la creación.
-- **No renombres los servicios**: los hostnames `taiga-back.railway.internal`
-  y `taiga-events.railway.internal` están fijados en `gateway.conf`.
+- **502/499 en el dominio**: comprueba que el dominio del servicio `app` tiene
+  **target port 80** (si la autodetección eligió otro puerto, se rompe).
+- **"Welcome to nginx!" en lugar de Taiga**: el `index.html` de la SPA se
+  sobrescribe si el paquete nginx de Debian se instala después del COPY del
+  front. El Dockerfile ya copia el front después del `apt-get install`; si
+  vuelve a pasar, redespliega el `app`.
+- **Postgres `initdb: directory exists but is not empty`**: revisa que
+  `PGDATA=/var/lib/postgresql/data/pgdata` esté definido en `postgres`.
+- **El admin no se crea**: mira los logs de `app`; con
+  `ADMIN_BOOTSTRAP_ENABLED=true` el script crea el superuser de forma
+  idempotente (si ya existe, lo omite).
+- **Los avatares/adjuntos no cargan**: comprueba que el volumen
+  `/taiga-back/media` está montado en `app`.
+- **La SPA carga pero la API falla**: revisa que `app` resuelve
+  `postgres.railway.internal` y `rabbitmq.railway.internal` (red privada del
+  mismo proyecto).
 
 ## Licencias
 
